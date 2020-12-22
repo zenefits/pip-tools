@@ -8,6 +8,7 @@ from itertools import chain, count
 
 from . import click
 from ._compat import install_req_from_line
+from .exceptions import NoCandidateFound
 from .logging import log
 from .utils import (
     UNSAFE_PACKAGES,
@@ -307,9 +308,25 @@ class Resolver(object):
             # hitting the index server
             best_match = ireq
         else:
-            best_match = self.repository.find_best_match(
-                ireq, prereleases=self.prereleases
-            )
+            try:
+                best_match = self.repository.find_best_match(
+                    ireq, prereleases=self.prereleases
+                )
+            except NoCandidateFound:
+                # maybe we got a version conflict, try finding a match using our contraints for this requirement
+                for constraint in self.our_constraints:
+                    if constraint.req.name == ireq.req.name:
+                        new_req = constraint.req
+                        original_req = ireq.req
+                        # TODO: not sure if we should mutate ireq or create a new object
+                        ireq.req = new_req
+
+                        best_match = self.repository.find_best_match(ireq, prereleases=self.prereleases)
+                        log.warning('Conflicting versions found: {}, using our constraints: {}'.format(original_req, new_req))
+                        break
+                else:
+                    raise
+
 
         # Format the best match
         log.debug(
